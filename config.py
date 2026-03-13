@@ -80,14 +80,14 @@ class Config:
         # URLs for various bot images
         self.DEFAULT_THUMB: str = getenv(
             "DEFAULT_THUMB",
-            "https://files.catbox.moe/r83igx.jpg"  # Default thumbnail
+            "https://files.catbox.moe/dayzew.jpg"  # Default thumbnail
         )
         self.PING_IMG: str = getenv(
-            "PING_IMG", "https://files.catbox.moe/r83igx.jpg")    # Ping command image
+            "PING_IMG", "https://files.catbox.moe/dayzew.jpg")    # Ping command image
         self.START_IMG: str = getenv(
-            "START_IMG", "https://files.catbox.moe/r83igx.jpg")  # Start command image
+            "START_IMG", "https://files.catbox.moe/dayzew.jpg")  # Start command image
         self.RADIO_IMG: str = getenv(
-            "RADIO_IMG", "https://files.catbox.moe/r83igx.jpg")    # Radio command image
+            "RADIO_IMG", "https://files.catbox.moe/dayzew.jpg")    # Radio command image
 
         # ============ MODERATION ============
         # List of usernames to exclude from admin mentions
@@ -119,7 +119,7 @@ class Config:
         Returns:
             List[str]: List of valid cookie URLs.
         """
-        cookie_str = getenv("COOKIE_URL", "https://batbin.me/insapiency")
+        cookie_str = getenv("COOKIE_URL", "")
         if not cookie_str:
             return []
 
