@@ -1,9 +1,5 @@
 import os
 import re
-import glob
-import time
-import yt_dlp
-import random
 import asyncio
 import aiohttp
 from dataclasses import replace
@@ -18,11 +14,9 @@ from Elevenyts.helpers import Track, utils
 
 class YouTube:
     def __init__(self):
-        """Initialize YouTube handler with configuration and caching."""
+        """Initialize YouTube handler with API configuration."""
         self.base = "https://www.youtube.com/watch?v="  # Base YouTube URL
-        self.cookies = []  # List of available cookie files
-        self.checked = False  # Whether cookies directory has been checked
-        self.warned = False  # Whether missing cookies warning has been shown
+        self.api_url = config.YOUTUBE_API_URL  # API URL for downloads
 
         # Regular expression to match YouTube URLs (videos, shorts, playlists)
         self.regex = re.compile(
@@ -70,79 +64,12 @@ class YouTube:
             return path
         return None
 
-    def get_cookies(self):
-        if not self.checked:
-            for file in os.listdir("Elevenyts/cookies"):
-                if file.endswith(".txt"):
-                    self.cookies.append(file)
-            self.checked = True
-        if not self.cookies:
-            if not self.warned:
-                self.warned = True
-                logger.warning("Cookies are missing; downloads might fail.")
-            return None
-        return f"Elevenyts/cookies/{random.choice(self.cookies)}"
-
-    def _is_bot_check_error(self, error_msg: str) -> bool:
-        msg = (error_msg or "").lower()
-        return (
-            "sign in to confirm" in msg
-            or "not a bot" in msg
-            or "page needs to be reloaded" in msg
-        )
-
-    def _remove_cookie(self, cookie_path: Optional[str]) -> None:
-        if not cookie_path:
-            return
-        cookie_name = os.path.basename(cookie_path)
-        if cookie_name in self.cookies:
-            self.cookies.remove(cookie_name)
-        try:
-            if os.path.exists(cookie_path):
-                os.remove(cookie_path)
-        except Exception:
-            pass
-
-    async def save_cookies(self, urls: list[str]) -> None:
-        logger.info("🍪 Saving cookies from urls...")
-        saved_count = 0
-        for url in urls:
-            try:
-                path = f"Elevenyts/cookies/cookie{random.randint(10000, 99999)}.txt"
-                link = url.replace("me/", "me/raw/")
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(link) as resp:
-                        if resp.status != 200:
-                            logger.error(f"❌ Cookie download failed: HTTP {resp.status} from {url}")
-                            continue
-                        content = await resp.read()
-                        if not content or len(content) < 50:
-                            logger.error(f"❌ Cookie file empty or invalid from {url}")
-                            continue
-                        with open(path, "wb") as fw:
-                            fw.write(content)
-                        if os.path.exists(path) and os.path.getsize(path) > 0:
-                            saved_count += 1
-                            # Add the new cookie file to the list immediately
-                            cookie_filename = os.path.basename(path)
-                            if cookie_filename not in self.cookies:
-                                self.cookies.append(cookie_filename)
-                            logger.info(f"✅ Saved: {cookie_filename} ({len(content)} bytes)")
-            except Exception as e:
-                logger.error(f"❌ Cookie download error from {url}: {e}")
-        
-        # Force refresh of cookie list after download
-        self.checked = True
-        
-        if saved_count > 0:
-            logger.info(f"✅ Cookies saved. ({saved_count} file(s))")
-        else:
-            logger.error("❌ No cookies saved! Check COOKIE_URL in .env. YouTube downloads will fail!")
-
     def valid(self, url: str) -> bool:
+        """Check if URL is a valid YouTube URL."""
         return bool(re.match(self.regex, url))
 
     def url(self, message_1: types.Message) -> Union[str, None]:
+        """Extract YouTube URL from message."""
         messages = [message_1]
         link = None
         if message_1.reply_to_message:
@@ -169,6 +96,7 @@ class YouTube:
         return None
 
     async def search(self, query: str, m_id: int) -> Track | None:
+        """Search for a video on YouTube."""
         # Check cache first (10-minute TTL)
         cache_key = query
         current_time = asyncio.get_running_loop().time()
@@ -223,6 +151,7 @@ class YouTube:
         return None
 
     async def playlist(self, limit: int, user: str, url: str) -> list[Track]:
+        """Extract playlist tracks."""
         try:
             plist = await Playlist.get(url)
             tracks = []
@@ -271,97 +200,20 @@ class YouTube:
             # Re-raise other exceptions
             raise
 
-    async def download(self, video_id: str, is_live: bool = False, video: bool = False) -> Optional[str]:
-        url = self.base + video_id
+    async def _download_via_api(self, video_id: str, video: bool = False) -> Optional[str]:
+        """
+        Download audio/video using external API.
+        This replaces the cookie-based yt-dlp approach.
+        """
+        file_type = "video" if video else "audio"
+        ext = "mp4" if video else "mp3"
+        file_path = os.path.join("downloads", f"{video_id}.{ext}")
 
-        # For live streams, extract the direct stream URL using yt-dlp with cookies
-        if is_live:
-            cookie = self.get_cookies()
-            ydl_opts = {
-                "quiet": True,
-                "no_warnings": True,
-                "cookiefile": cookie,
-                "format": "bestaudio/best",
-                "extractor_retries": 5,
-                "sleep_interval_requests": 1,
-                # Use android client to bypass YouTube bot detection on server IPs
-                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-            }
+        # Check if file already exists
+        if os.path.exists(file_path):
+            return file_path
 
-            def _extract_url():
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    try:
-                        info = ydl.extract_info(url, download=False)
-                        return info.get("url") or info.get("manifest_url")
-                    except yt_dlp.utils.ExtractorError as ex:
-                        error_msg = str(ex)
-                        if self._is_bot_check_error(error_msg) or "bot" in error_msg.lower():
-                            logger.error(
-                                "YouTube bot-check triggered for live stream. Rotating cookie.")
-                            self._remove_cookie(cookie)
-                        elif "not available" in error_msg.lower():
-                            logger.error(
-                                "Video format not available or region-blocked.")
-                        else:
-                            logger.error(
-                                "Live stream URL extraction failed: %s", ex)
-                        return None
-                    except yt_dlp.utils.DownloadError as ex:
-                        error_msg = str(ex)
-                        if "failed to load cookies" in error_msg.lower() or "netscape format" in error_msg.lower():
-                            logger.error(
-                                "❌ Corrupted cookie file detected for live stream, removing: %s", cookie)
-                            self._remove_cookie(cookie)
-                        elif self._is_bot_check_error(error_msg):
-                            logger.error("YouTube bot-check triggered for live stream. Rotating cookie.")
-                            self._remove_cookie(cookie)
-                        else:
-                            logger.error(
-                                "Unexpected error during live stream extraction: %s", ex)
-                        return None
-                    except Exception as ex:
-                        logger.error(
-                            "Unexpected error during live stream extraction: %s", ex)
-                        return None
-
-            stream_url = await asyncio.to_thread(_extract_url)
-            return stream_url if stream_url else url
-
-        # Download audio/video file
-        # Don't hardcode extension - let yt-dlp choose best available format
-        # Will use outtmpl pattern to get actual extension
-        filename_pattern = f"downloads/{video_id}"
-        
-        # Check if any completed file for this video_id already exists
-        existing_files = [
-            f for f in glob.glob(f"{filename_pattern}.*")
-            if not f.endswith('.part')
-        ]
-        if video:
-            video_candidates = [
-                f for f in existing_files
-                if Path(f).suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"}
-            ]
-            if video_candidates:
-                return video_candidates[0]
-        else:
-            audio_candidates = [
-                f for f in existing_files
-                if Path(f).suffix.lower() in {".m4a", ".webm", ".opus", ".mp3", ".ogg", ".wav", ".flac"}
-            ]
-            if audio_candidates:
-                return audio_candidates[0]
-
-            # VPS caches are often dominated by mp4 due to prior /vplay usage.
-            # Reuse those files for /play (audio-only mode) to avoid redundant redownloads.
-            container_fallbacks = [
-                f for f in existing_files
-                if Path(f).suffix.lower() in {".mp4", ".mkv", ".mov"}
-            ]
-            if container_fallbacks:
-                return container_fallbacks[0]
-        
-        # Ensure downloads directory exists with write permissions
+        # Ensure downloads directory exists
         downloads_dir = Path("downloads")
         if not downloads_dir.exists():
             try:
@@ -371,171 +223,110 @@ class YouTube:
                 logger.error(f"❌ Cannot create downloads directory: {e}")
                 return None
 
-        # **PERFORMANCE FIX**: Use semaphore to limit concurrent downloads
-        # Prevents bandwidth saturation when 15-20 groups download simultaneously
-        async with self._download_semaphore:
-            cookie = self.get_cookies()
-            base_opts = {
-                "outtmpl": "downloads/%(id)s.%(ext)s",
-                "quiet": True,
-                "noplaylist": True,
-                "geo_bypass": True,
-                "no_warnings": True,
-                "overwrites": False,
-                "nocheckcertificate": True,
-                "continuedl": True,
-                "noprogress": True,
-                # **PERFORMANCE FIX**: Reduced to 4 fragments for maximum stability
-                # 4 fragments × 5 concurrent downloads = 20 total connections (prevents bandwidth saturation)
-                # Lower = more stable but slightly slower downloads (trade-off for zero lag)
-                "concurrent_fragment_downloads": 4,
-                "http_chunk_size": 524288,  # 512KB chunks (smaller = more stable streaming)
-                "socket_timeout": 30,  # Increased from 15s (prevents timeout on slow networks)
-                "retries": 2,  # Increased from 1 (better reliability)
-                "fragment_retries": 2,  # Increased from 1 (handle network hiccups)
-                "extractor_retries": 5,
-                "sleep_interval_requests": 1,
-                # Use android client to bypass YouTube bot detection on server IPs.
-                # Android client does not require PO tokens and works from datacenter IPs.
-                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-            }
+        try:
+            async with aiohttp.ClientSession() as session:
+                # First, get download token
+                params = {"url": video_id, "type": file_type}
+                
+                async with session.get(
+                    f"{self.api_url}/download",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=7)
+                ) as response:
+                    if response.status != 200:
+                        logger.error(f"❌ API request failed: HTTP {response.status}")
+                        return None
 
-            if video:
-                # Video mode: download best video/audio combo up to configured height
-                height_filter = ""
-                if self._max_video_height and self._max_video_height > 0:
-                    height_filter = f"[height<={self._max_video_height}]"
-                format_chain = (
-                    f"bestvideo[ext=mp4]{height_filter}+bestaudio[ext=m4a]/"
-                    f"bestvideo{height_filter}+bestaudio/"
-                    "bestvideo+bestaudio/best"
-                )
-                ydl_opts = {
-                    **base_opts,
-                    "format": format_chain,
-                    "merge_output_format": "mp4",
-                    "postprocessors": [
-                        {
-                            "key": "FFmpegVideoConvertor",
-                            "preferedformat": "mp4",
-                        }
-                    ],
-                }
-            else:
-                # Audio mode: favor m4a/opus for best compatibility
-                ydl_opts = {
-                    **base_opts,
-                    "format": "bestaudio[ext=m4a]/bestaudio[acodec=opus]/bestaudio/best",
-                    "postprocessors": [],
-                }
-
-            ydl_opts_no_cookie = {
-                **ydl_opts,
-            }
-            ydl_opts_cookie = {
-                **ydl_opts,
-                "cookiefile": cookie,
-            }
-
-            last_error_kind = None
-
-            def _download(ydl_runtime_opts):
-                nonlocal last_error_kind
-                ydl_instance = None
-                try:
-                    last_error_kind = None
-                    ydl_instance = yt_dlp.YoutubeDL(ydl_runtime_opts)
-                    # Extract info to get actual extension downloaded
-                    info = ydl_instance.extract_info(url, download=True)
-                    if not info:
-                        logger.error(f"❌ Failed to extract info for {video_id}")
+                    data = await response.json()
+                    download_token = data.get("download_token")
+                    
+                    if not download_token:
+                        logger.error("❌ No download token received from API")
                         return None
                     
-                    time.sleep(0.5)
-                    located = self._locate_download_file(video_id, video=video)
-                    if located:
-                        return located
-                    logger.error(f"❌ Download completed but file not found for: {video_id}")
-                    return None
-                except yt_dlp.utils.ExtractorError as ex:
-                    error_msg = str(ex)
-                    if self._is_bot_check_error(error_msg) or "bot" in error_msg.lower():
-                        last_error_kind = "bot"
-                        logger.warning(
-                            f"⚠️ YouTube bot-check for {video_id}.")
-                    elif "not available" in error_msg.lower():
-                        last_error_kind = "availability"
-                        logger.error(
-                            "❌ Video not available: May be region-blocked or private.")
-                    elif "age" in error_msg.lower():
-                        last_error_kind = "age"
-                        logger.error(
-                            "❌ Age-restricted video: Cookies required.")
-                    else:
-                        last_error_kind = "extractor"
-                        logger.error("❌ YouTube extraction failed: %s", ex)
-                    return None
-                except yt_dlp.utils.DownloadError as ex:
-                    error_msg = str(ex)
-                    recovered = self._locate_download_file(video_id, video=video)
-                    if "unable to rename file" in error_msg.lower() and recovered:
-                        logger.warning(
-                            f"⚠️ Renaming failed for {video_id}, using recovered file {Path(recovered).name}"
-                        )
-                        return recovered
-                    if "416" in error_msg or "Requested range not satisfiable" in error_msg:
-                        last_error_kind = "range"
-                        # HTTP 416 - file partially downloaded, delete and retry won't help
-                        logger.warning(f"⚠️ Range error for {video_id}, skipping")
-                    elif "failed to load cookies" in error_msg.lower() or "netscape format" in error_msg.lower():
-                        last_error_kind = "cookie"
-                        logger.warning(f"⚠️ Failed to load cookies for {video_id}: {error_msg}")
-                        # Remove corrupted cookie from list and filesystem
-                        self._remove_cookie(ydl_runtime_opts.get("cookiefile"))
-                    elif self._is_bot_check_error(error_msg):
-                        last_error_kind = "bot"
-                        logger.warning(f"⚠️ Bot-check for {video_id}: {error_msg}")
-                        self._remove_cookie(ydl_runtime_opts.get("cookiefile"))
-                    else:
-                        last_error_kind = "download"
-                        logger.warning(f"⚠️ Download error for {video_id}: {ex}")
-                        if recovered:
-                            logger.warning(
-                                f"⚠️ Using recovered file for {video_id} despite download error"
-                            )
-                            return recovered
-                    return None
-                except Exception as ex:
-                    last_error_kind = "unexpected"
-                    logger.warning(f"⚠️ Unexpected download error for {video_id}: {ex}")
-                    return None
-                finally:
-                    # CRITICAL: Explicitly close yt-dlp to release file handles
-                    if ydl_instance:
-                        try:
-                            ydl_instance.close()
-                        except Exception:
-                            pass
+                    # Download the file
+                    stream_url = f"{self.api_url}/stream/{video_id}?type={file_type}&token={download_token}"
+                    
+                    async with session.get(
+                        stream_url,
+                        timeout=aiohttp.ClientTimeout(total=300 if video else 300)
+                    ) as file_response:
+                        if file_response.status == 302:
+                            # Handle redirect
+                            redirect_url = file_response.headers.get('Location')
+                            if redirect_url:
+                                async with session.get(redirect_url) as final_response:
+                                    if final_response.status != 200:
+                                        logger.error(f"❌ Redirect failed: HTTP {final_response.status}")
+                                        return None
+                                    with open(file_path, "wb") as f:
+                                        async for chunk in final_response.content.iter_chunked(16384):
+                                            f.write(chunk)
+                        elif file_response.status == 200:
+                            # Direct download
+                            with open(file_path, "wb") as f:
+                                async for chunk in file_response.content.iter_chunked(16384):
+                                    f.write(chunk)
+                        else:
+                            logger.error(f"❌ Download failed: HTTP {file_response.status}")
+                            return None
+                        
+                        # Verify file was downloaded
+                        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                            logger.info(f"✅ Downloaded: {video_id}.{ext}")
+                            return file_path
+                        else:
+                            logger.error(f"❌ Downloaded file is empty or missing: {file_path}")
+                            return None
 
-            # Attempt 1: with cookie (needed for age-restricted/private videos)
-            primary_opts = ydl_opts_cookie if cookie else ydl_opts_no_cookie
-            result = await asyncio.to_thread(_download, primary_opts)
-            if result:
-                return result
-
-            # Bot-check mitigation from yt-dlp wiki: rotate/avoid stale cookies
-            if last_error_kind in {"bot", "cookie"}:
-                fresh_cookie = self.get_cookies()
-                if fresh_cookie and fresh_cookie != cookie:
-                    logger.info(f"🔄 Retrying {video_id} with rotated cookie...")
-                    rotated_opts = {**ydl_opts_cookie, "cookiefile": fresh_cookie}
-                    result = await asyncio.to_thread(_download, rotated_opts)
-                    if result:
-                        return result
-
-                logger.info(f"🧪 Retrying {video_id} without cookies...")
-                result = await asyncio.to_thread(_download, ydl_opts_no_cookie)
-                if result:
-                    return result
-
+        except asyncio.TimeoutError:
+            logger.error(f"❌ Download timeout for {video_id}")
             return None
+        except Exception as e:
+            logger.error(f"❌ Download error for {video_id}: {e}")
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
+            return None
+
+    async def download(self, video_id: str, is_live: bool = False, video: bool = False) -> Optional[str]:
+        """
+        Download a video or audio from YouTube using API.
+        
+        Args:
+            video_id: YouTube video ID
+            is_live: Whether this is a live stream
+            video: True for video download, False for audio only
+        
+        Returns:
+            Path to downloaded file or stream URL for live content
+        """
+        url = self.base + video_id
+
+        # For live streams, we need to extract the stream URL
+        if is_live:
+            # Try to get live stream URL via API
+            try:
+                async with aiohttp.ClientSession() as session:
+                    params = {"url": video_id, "type": "live"}
+                    async with session.get(
+                        f"{self.api_url}/live",
+                        params=params,
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            stream_url = data.get("stream_url")
+                            if stream_url:
+                                return stream_url
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to get live stream URL: {e}")
+            
+            # Fallback: return the YouTube URL directly (player will handle it)
+            return url
+
+        # Use semaphore to limit concurrent downloads
+        async with self._download_semaphore:
+            return await self._download_via_api(video_id, video)
