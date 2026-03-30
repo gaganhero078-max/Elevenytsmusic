@@ -11,3 +11,6 @@ yt-dlp[default]>=2026.3.3
 ffmpeg
 telegraph
 gpytranslate
+pyrogram
+tgcrypto
+requests
