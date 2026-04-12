@@ -83,11 +83,11 @@ class Config:
             "https://files.catbox.moe/43u332.jpg"  # Default thumbnail
         )
         self.PING_IMG: str = getenv(
-            "PING_IMG", "https://files.catbox.moe/43u332.jpg")    # Ping command image
+            "PING_IMG", "https://i.ibb.co/dwNf9mdm/x.jpg")    # Ping command image
         self.START_IMG: str = getenv(
-            "START_IMG", "https://files.catbox.moe/43u332.jpg")  # Start command image
+            "START_IMG", "https://i.ibb.co/KpxDN1yh/x.jpg")  # Start command image
         self.RADIO_IMG: str = getenv(
-            "RADIO_IMG", "https://files.catbox.moe/43u332.jpg")    # Radio command image
+            "RADIO_IMG", "https://i.ibb.co/PG18B8mm/x.jpg")    # Radio command image
 
         # ============ MODERATION ============
         # List of usernames to exclude from admin mentions
