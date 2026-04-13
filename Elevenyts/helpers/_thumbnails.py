@@ -33,7 +33,7 @@ ICONS_Y = BAR_Y + 48
 MAX_TITLE_WIDTH = 580
 
 # Watermark constants
-WATERMARK_TEXT = "ElevenytsBot"
+WATERMARK_TEXT = "Adammusicbot"
 
 
 def trim_to_width(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> str:
