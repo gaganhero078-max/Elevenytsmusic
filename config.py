@@ -80,7 +80,7 @@ class Config:
         # URLs for various bot images
         self.DEFAULT_THUMB: str = getenv(
             "DEFAULT_THUMB",
-            "https://files.catbox.moe/43u332.jpg"  # Default thumbnail
+            "https://i.ibb.co/v48GT3YC/x.jpg"  # Default thumbnail
         )
         self.PING_IMG: str = getenv(
             "PING_IMG", "https://i.ibb.co/dwNf9mdm/x.jpg")    # Ping command image
